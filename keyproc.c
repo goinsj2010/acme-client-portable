@@ -82,7 +82,7 @@ keyproc(int netsock, int ocsp, const char *keyfile, const char *csrfile,
 {
 	char		*der64 = NULL, *der = NULL, *dercp, 
 			*sans = NULL, *san = NULL;
-	FILE		*f, *f2;
+	FILE		*f = NULL, *f2 = NULL;
 	size_t		 i, sansz;
 	void		*pp;
 	EVP_PKEY	*pkey = NULL;
@@ -160,13 +160,11 @@ keyproc(int netsock, int ocsp, const char *keyfile, const char *csrfile,
 
 		fclose(f);
 		f = NULL;
-	}
 
-	/*
-	 * Generate our certificate from the EVP public key.
-	 * Then set it as the X509 requester's key.
-	 */
-	if (newcsr) {
+		/*
+		 * Generate our certificate from the EVP public key.
+		 * Then set it as the X509 requester's key.
+		 */
 		if (NULL == (x = X509_REQ_new())) {
 			warnx("X509_new");
 			goto out;
