@@ -141,13 +141,13 @@ main(int argc, char *argv[])
 	      		 *challenge = NULL, *sp = NULL;
 	const char	**alts = NULL, **newargs = NULL, *modval = NULL;
 	char		 *certdir = NULL, *acctkey = NULL, 
-			 *chngdir = NULL, *keyfile = NULL,
+			 *chngdir = NULL, *keyfile = NULL, *csrfile = NULL,
 			 *keydir, *acctdir;
 	int		  key_fds[2], acct_fds[2], chng_fds[2],
 			  cert_fds[2], file_fds[2], dns_fds[2],
 			  rvk_fds[2];
 	int		  c, rc, newacct = 0, revocate = 0, force = 0,
-			  staging = 0, multidir = 0, newkey = 0, 
+			  staging = 0, multidir = 0, newkey = 0, newcsr = 1,
 			  backup = 0, build_certdir, build_ssldir, 
 			  build_acctdir, expand = 0, ocsp = 0;
 	pid_t		  pids[COMP__MAX];
@@ -177,7 +177,7 @@ main(int argc, char *argv[])
 
 	/* Now parse arguments. */
 
-	while (-1 != (c = getopt(argc, argv, "beFmnNOrsva:f:c:C:k:t:x:X:"))) 
+	while (-1 != (c = getopt(argc, argv, "beFmnNOrsva:f:g:c:C:k:t:x:X:"))) 
 		switch (c) {
 		case ('a'):
 			agreement = optarg;
@@ -201,6 +201,12 @@ main(int argc, char *argv[])
 		case ('f'):
 			free(acctkey);
 			if (NULL == (acctkey = strdup(optarg)))
+				err(EXIT_FAILURE, "strdup");
+			break;
+		case ('g'):
+			newcsr = 0;
+			free(csrfile);
+			if (NULL == (csrfile = strdup(optarg)))
 				err(EXIT_FAILURE, "strdup");
 			break;
 		case ('F'):
@@ -392,8 +398,8 @@ main(int argc, char *argv[])
 		exit(c ? EXIT_SUCCESS : EXIT_FAILURE);
 	} else if (0 == strcmp(sp, subps[COMP_KEY])) {
 		proccomp = COMP_KEY;
-		c = keyproc(FDS_KEY, ocsp, keyfile,
-			(const char **)alts, altsz, newkey);
+		c = keyproc(FDS_KEY, ocsp, keyfile, csrfile,
+			(const char **)alts, altsz, newkey, newcsr);
 		free(alts);
 		exit(c ? EXIT_SUCCESS : EXIT_FAILURE);
 	} else if (0 == strcmp(sp, subps[COMP_NET])) {
@@ -479,10 +485,14 @@ main:
 		ne++;
 	}
 
-	if ( ! newkey && -1 == access(keyfile, R_OK)) {
+	if ( ! newkey && newcsr && -1 == access(keyfile, R_OK)) {
 		warnx("%s: -k file must exist", keyfile);
 		ne++;
 	} 
+
+	if ( ! newcsr && -1 == access(csrfile, R_OK)) {
+		warnx("%s: -g CSR file must exist", csrfile);
+	}
 
 	if (NULL == challenge && -1 == access(chngdir, R_OK)) {
 		warnx("%s: -C directory must exist", chngdir);
@@ -670,6 +680,7 @@ main:
 
 	free(certdir);
 	free(keyfile);
+	free(csrfile);
 	free(acctkey);
 	free(chngdir);
 	free(alts);
@@ -684,12 +695,14 @@ usage:
 		"[-C challengedir] "
 		"[-c certdir] "
 		"[-f accountkey] "
+		"[-g csrfile] "
 		"[-k domainkey] "
 		"[-t challenge] "
 		"domain [altnames...]\n", 
 		getprogname());
 	free(certdir);
 	free(keyfile);
+	free(csrfile);
 	free(acctkey);
 	free(chngdir);
 	return (EXIT_FAILURE);

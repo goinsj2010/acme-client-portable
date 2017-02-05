@@ -77,12 +77,12 @@ add_ext(STACK_OF(X509_EXTENSION) *sk, int nid, const char *value)
  * jail and, on success, ship it to "netsock" as an X509 request.
  */
 int
-keyproc(int netsock, int ocsp, const char *keyfile,
-	const char **alts, size_t altsz, int newkey)
+keyproc(int netsock, int ocsp, const char *keyfile, const char *csrfile,
+	const char **alts, size_t altsz, int newkey, int newcsr)
 {
 	char		*der64 = NULL, *der = NULL, *dercp, 
 			*sans = NULL, *san = NULL;
-	FILE		*f;
+	FILE		*f, *f2;
 	size_t		 i, sansz;
 	void		*pp;
 	EVP_PKEY	*pkey = NULL;
@@ -108,6 +108,14 @@ keyproc(int netsock, int ocsp, const char *keyfile,
 		goto out;
 	}
 
+	if (! newcsr) {
+		f2 = fopen(csrfile, "r");
+
+		if (NULL == f2) {
+			warn("%s", csrfile);
+			goto out;
+		}
+	}
 	/* File-system, user, and sandbox jail. */
 	
 	if ( ! sandbox_before())
@@ -134,17 +142,20 @@ keyproc(int netsock, int ocsp, const char *keyfile,
 		RAND_seed(rbuf, sizeof(rbuf));
 	}
 
-	if (newkey) {
-		dodbg("%s: generating RSA domain key", keyfile);
-		if (NULL == (pkey = rsa_key_create(f, keyfile)))
-			goto out;
-	} else {
-		doddbg("%s: loading domain key", keyfile);
-		if (NULL == (pkey = key_load(f, keyfile)))
-			goto out;
-		doddbg("%s: loaded %s domain key", keyfile, 
-			EVP_PKEY_RSA == EVP_PKEY_type(pkey->type) ?
-			"RSA" : "ECSDA");
+	if (newcsr) {
+		if (newkey) {
+			dodbg("%s: generating RSA domain key", keyfile);
+			if (NULL == (pkey = rsa_key_create(f, keyfile)))
+				goto out;
+		} else {
+
+			doddbg("%s: loading domain key", keyfile);
+			if (NULL == (pkey = key_load(f, keyfile)))
+				goto out;
+			doddbg("%s: loaded %s domain key", keyfile, 
+				EVP_PKEY_RSA == EVP_PKEY_type(pkey->type) ?
+				"RSA" : "ECSDA");
+		}
 
 	}
 
@@ -155,129 +166,139 @@ keyproc(int netsock, int ocsp, const char *keyfile,
 	 * Generate our certificate from the EVP public key.
 	 * Then set it as the X509 requester's key.
 	 */
-
-	if (NULL == (x = X509_REQ_new())) {
-		warnx("X509_new");
-		goto out;
-	} else if ( ! X509_REQ_set_pubkey(x, pkey)) {
-		warnx("X509_set_pubkey");
-		goto out;
-	}
-
-	/* Now specify the common name that we'll request. */
-
-	if (NULL == (name = X509_NAME_new())) {
-		warnx("X509_NAME_new");
-		goto out;
-	} else if ( ! X509_NAME_add_entry_by_txt(name, "CN",
-		MBSTRING_ASC, (u_char *)alts[0], -1, -1, 0)) {
-		warnx("X509_NAME_add_entry_by_txt: CN=%s", alts[0]);
-		goto out;
-	} else if ( ! X509_REQ_set_subject_name(x, name)) {
-		warnx("X509_req_set_issuer_name");
-		goto out;
-	}
-
-	/*
-	 * Now add the SAN extensions.
-	 * This was lifted more or less directly from demos/x509/mkreq.c
-	 * of the OpenSSL source code.
-	 * (The zeroth altname is the domain name.)
-	 * TODO: is this the best way of doing this?
-	 */
-
-	if (altsz > 1) {
-		nid = NID_subject_alt_name;
-		if (NULL == (exts = sk_X509_EXTENSION_new_null())) {
-			warnx("sk_X509_EXTENSION_new_null");
+	if (newcsr) {
+		if (NULL == (x = X509_REQ_new())) {
+			warnx("X509_new");
+			goto out;
+		} else if ( ! X509_REQ_set_pubkey(x, pkey)) {
+			warnx("X509_set_pubkey");
 			goto out;
 		}
-		/* Initialise to empty string. */
-		if (NULL == (sans = strdup(""))) {
-			warn("strdup");
+
+		/* Now specify the common name that we'll request. */
+
+		if (NULL == (name = X509_NAME_new())) {
+			warnx("X509_NAME_new");
+			goto out;
+		} else if ( ! X509_NAME_add_entry_by_txt(name, "CN",
+			MBSTRING_ASC, (u_char *)alts[0], -1, -1, 0)) {
+			warnx("X509_NAME_add_entry_by_txt: CN=%s", alts[0]);
+			goto out;
+		} else if ( ! X509_REQ_set_subject_name(x, name)) {
+			warnx("X509_req_set_issuer_name");
 			goto out;
 		}
-		sansz = strlen(sans) + 1;
 
 		/*
-		 * For each SAN entry, append it to the string.
-		 * We need a single SAN entry for all of the SAN
-		 * domains: NOT an entry per domain!
+		 * Now add the SAN extensions.
+		 * This was lifted more or less directly from demos/x509/mkreq.c
+		 * of the OpenSSL source code.
+		 * (The zeroth altname is the domain name.)
+		 * TODO: is this the best way of doing this?
 		 */
 
-		for (i = 1; i < altsz; i++) {
-			dodbg("adding SAN: %s", alts[i]);
-			san = doasprintf("%sDNS:%s", 
-				i > 1 ? "," : "", alts[i]);
-			if (NULL == san) {
-				warn("asprintf");
+		if (altsz > 1) {
+			nid = NID_subject_alt_name;
+			if (NULL == (exts = sk_X509_EXTENSION_new_null())) {
+				warnx("sk_X509_EXTENSION_new_null");
 				goto out;
 			}
-			pp = realloc(sans, sansz + strlen(san));
-			if (NULL == pp) {
-				warn("realloc");
+			/* Initialise to empty string. */
+			if (NULL == (sans = strdup(""))) {
+				warn("strdup");
 				goto out;
 			}
-			sans = pp;
-			sansz += strlen(san);
-			strlcat(sans, san, sansz);
-			free(san);
-			san = NULL;
+			sansz = strlen(sans) + 1;
+
+			/*
+			 * For each SAN entry, append it to the string.
+			 * We need a single SAN entry for all of the SAN
+			 * domains: NOT an entry per domain!
+			 */
+
+			for (i = 1; i < altsz; i++) {
+				dodbg("adding SAN: %s", alts[i]);
+				san = doasprintf("%sDNS:%s", 
+					i > 1 ? "," : "", alts[i]);
+				if (NULL == san) {
+					warn("asprintf");
+					goto out;
+				}
+				pp = realloc(sans, sansz + strlen(san));
+				if (NULL == pp) {
+					warn("realloc");
+					goto out;
+				}
+				sans = pp;
+				sansz += strlen(san);
+				strlcat(sans, san, sansz);
+				free(san);
+				san = NULL;
+			}
+
+			if ( ! add_ext(exts, nid, sans)) {
+				warnx("add_ext");
+				goto out;
+			} else if ( ! X509_REQ_add_extensions(x, exts)) {
+				warnx("X509_REQ_add_extensions");
+				goto out;
+			}
+			sk_X509_EXTENSION_pop_free
+				(exts, X509_EXTENSION_free);
 		}
 
-		if ( ! add_ext(exts, nid, sans)) {
-			warnx("add_ext");
-			goto out;
-		} else if ( ! X509_REQ_add_extensions(x, exts)) {
-			warnx("X509_REQ_add_extensions");
+		/*
+		 * OCSP stapling.
+		 * This is very unpleasant because we need to create a new NID
+		 * from a magical OID.
+		 * The OID is given in RFC 7633, section 4.
+		 * The extension feature (same, section 4.1) is the DER encoded
+		 * version of "status_request", section 4.2.3.1.
+		 * We follow the same logic of adding SAN entries.
+		 * I give an arbitrary name for the NID.
+		 */
+		
+		if (ocsp) {
+			dodbg("adding OCSP stapling");
+			if (NULL == (exts = sk_X509_EXTENSION_new_null())) {
+				warnx("sk_X509_EXTENSION_new_null");
+				goto out;
+			}
+
+			nid = OBJ_create("1.3.6.1.5.5.7.1.24", 
+				"OCSPReq", "OCSP Request");
+			if (NID_undef == nid) {
+				warnx("OBJ_create");
+				goto out;
+			} else if ( ! add_ext(exts, nid, "DER:30:03:02:01:05")) {
+				warnx("add_ext");
+				goto out;
+			} else if ( ! X509_REQ_add_extensions(x, exts)) {
+				warnx("X509_REQ_add_extensions");
+				goto out;
+			}
+
+			sk_X509_EXTENSION_pop_free
+				(exts, X509_EXTENSION_free);
+		}
+
+		/* Sign the X509 request using SHA256. */
+
+		if ( ! X509_REQ_sign(x, pkey, EVP_sha256())) {
+			warnx("X509_sign");
 			goto out;
 		}
-		sk_X509_EXTENSION_pop_free
-			(exts, X509_EXTENSION_free);
+	} else {
+		// use the existing CSR
+		if (NULL == (x = PEM_read_X509_REQ(f2, NULL, NULL, NULL))) {
+			warnx("CSR_loading");
+			goto out;
+		}
+
+		// close the file afterwards
+		fclose(f2);
+		f2 = NULL;
 	}
-
-	/*
-	 * OCSP stapling.
-	 * This is very unpleasant because we need to create a new NID
-	 * from a magical OID.
-	 * The OID is given in RFC 7633, section 4.
-	 * The extension feature (same, section 4.1) is the DER encoded
-	 * version of "status_request", section 4.2.3.1.
-	 * We follow the same logic of adding SAN entries.
-	 * I give an arbitrary name for the NID.
-	 */
-	
-	if (ocsp) {
-		dodbg("adding OCSP stapling");
-		if (NULL == (exts = sk_X509_EXTENSION_new_null())) {
-			warnx("sk_X509_EXTENSION_new_null");
-			goto out;
-		}
-
-		nid = OBJ_create("1.3.6.1.5.5.7.1.24", 
-			"OCSPReq", "OCSP Request");
-		if (NID_undef == nid) {
-			warnx("OBJ_create");
-			goto out;
-		} else if ( ! add_ext(exts, nid, "DER:30:03:02:01:05")) {
-			warnx("add_ext");
-			goto out;
-		} else if ( ! X509_REQ_add_extensions(x, exts)) {
-			warnx("X509_REQ_add_extensions");
-			goto out;
-		}
-
-		sk_X509_EXTENSION_pop_free
-			(exts, X509_EXTENSION_free);
-	}
-
-	/* Sign the X509 request using SHA256. */
-
-	if ( ! X509_REQ_sign(x, pkey, EVP_sha256())) {
-		warnx("X509_sign");
-		goto out;
-	}
-
 	/* Now, serialise to DER, then base64. */
 
 	if ((len = i2d_X509_REQ(x, NULL)) < 0) {
