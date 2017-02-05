@@ -158,10 +158,9 @@ keyproc(int netsock, int ocsp, const char *keyfile, const char *csrfile,
 				"RSA" : "ECSDA");
 		}
 
+		fclose(f);
+		f = NULL;
 	}
-
-	fclose(f);
-	f = NULL;
 
 	/*
 	 * Generate our certificate from the EVP public key.
@@ -332,6 +331,8 @@ out:
 	close(netsock);
 	if (NULL != f)
 		fclose(f);
+	if (NULL != f2)
+		fclose(f2);
 	free(der);
 	free(der64);
 	free(sans);
