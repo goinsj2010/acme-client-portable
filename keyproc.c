@@ -93,22 +93,23 @@ keyproc(int netsock, int ocsp, const char *keyfile, const char *csrfile,
 	mode_t		 prev;
 	STACK_OF(X509_EXTENSION) *exts = NULL;
 
-	/*
-	 * First, open our private key file read-only or write-only if
-	 * we're creating from scratch.
-	 * Set our umask to be maximally restrictive.
-	 */
+	if (newcsr) {
+		/*
+		 * First, open our private key file read-only or write-only if
+		 * we're creating from scratch.
+		 * Set our umask to be maximally restrictive.
+		 */
 
-	prev = umask((S_IWUSR | S_IXUSR) | S_IRWXG | S_IRWXO);
-	f = fopen(keyfile, newkey ? "wx" : "r");
-	umask(prev);
+		prev = umask((S_IWUSR | S_IXUSR) | S_IRWXG | S_IRWXO);
+		f = fopen(keyfile, newkey ? "wx" : "r");
+		umask(prev);
 
-	if (NULL == f) {
-		warn("%s", keyfile);
-		goto out;
-	}
+		if (NULL == f) {
+			warn("%s", keyfile);
+			goto out;
+		}
 
-	if (! newcsr) {
+	} else {
 		f2 = fopen(csrfile, "r");
 
 		if (NULL == f2) {
